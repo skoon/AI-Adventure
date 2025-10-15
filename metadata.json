@@ -1,0 +1,5 @@
+{
+  "name": "Gemini Text Adventure",
+  "description": "A dynamic text adventure game where the story is generated in real-time by the Gemini API, responding to your choices and actions.",
+  "requestFramePermissions": []
+}
