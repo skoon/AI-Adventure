@@ -3,14 +3,15 @@ import type { StorySegment, AdventureGenre, ChatSession, SavedGame } from './typ
 import { GameState } from './types';
 import { StartScreen } from './components/StartScreen';
 import { GameScreen } from './components/GameScreen';
-import { startAdventure, continueAdventure, resumeAdventure } from './services/geminiService';
+import { startAdventure, continueAdventure, resumeAdventure, generateImage } from './services/geminiService';
 
 const SAVE_KEY = 'geminiAdventureSave';
 
-const parseGeminiResponse = (responseText: string): { narrative: string; itemsToAdd: string[]; itemsToRemove: string[] } => {
+const parseGeminiResponse = (responseText: string): { narrative: string; itemsToAdd: string[]; itemsToRemove: string[]; imagePrompt: string | null } => {
     const narrativeLines = [];
     const itemsToAdd: string[] = [];
     const itemsToRemove: string[] = [];
+    let imagePrompt: string | null = null;
     const lines = responseText.split('\n');
 
     for (const line of lines) {
@@ -24,13 +25,19 @@ const parseGeminiResponse = (responseText: string): { narrative: string; itemsTo
             itemsToRemove.push(removeMatch[1].trim());
             continue;
         }
+        const imagePromptMatch = line.match(/\[IMAGE_PROMPT:\s*(.+)\]/);
+        if (imagePromptMatch?.[1]) {
+            imagePrompt = imagePromptMatch[1].trim();
+            continue;
+        }
         narrativeLines.push(line);
     }
 
     return {
         narrative: narrativeLines.join('\n').trim(),
         itemsToAdd,
-        itemsToRemove
+        itemsToRemove,
+        imagePrompt,
     };
 };
 
@@ -54,6 +61,32 @@ const App: React.FC = () => {
         }
     }, []);
 
+    // Auto-save game progress
+    useEffect(() => {
+        if (gameState !== GameState.PLAYING || !chatSession || storyHistory.length === 0) {
+            return;
+        }
+
+        const saveGame = async () => {
+            try {
+                const chatHistory = await chatSession.getHistory();
+                if (chatHistory.length > 0) {
+                    const saveData: SavedGame = { storyHistory, chatHistory, inventory };
+                    localStorage.setItem(SAVE_KEY, JSON.stringify(saveData));
+                    setHasSaveGame(true);
+                }
+            } catch (e) {
+                console.error("Auto-save failed:", e);
+            }
+        };
+        
+        // Debounce saving to prevent rapid writes
+        const timer = setTimeout(saveGame, 500);
+        return () => clearTimeout(timer);
+
+    }, [storyHistory, inventory, gameState, chatSession]);
+
+
     const handleStartGame = useCallback(async (genre: AdventureGenre) => {
         setIsLoading(true);
         setErrorMessage(null);
@@ -66,7 +99,38 @@ const App: React.FC = () => {
 
             const { session, opening } = await startAdventure(genre);
             setChatSession(session);
-            setStoryHistory([{ id: 0, type: 'narrative', text: opening }]);
+
+            const { narrative, imagePrompt } = parseGeminiResponse(opening);
+
+            const openingSegment: StorySegment = {
+                 id: 0, 
+                 type: 'narrative', 
+                 text: narrative,
+                 isImageLoading: !!imagePrompt,
+            };
+            setStoryHistory([openingSegment]);
+            
+            if (imagePrompt) {
+                 (async () => {
+                    try {
+                        const base64Data = await generateImage(imagePrompt);
+                        const imageUrl = `data:image/png;base64,${base64Data}`;
+                         setStoryHistory(prev => prev.map(seg => 
+                            seg.id === openingSegment.id 
+                                ? { ...seg, imageUrl, isImageLoading: false } 
+                                : seg
+                        ));
+                    } catch (e) {
+                         console.error("Image generation failed:", e);
+                         setStoryHistory(prev => prev.map(seg => 
+                            seg.id === openingSegment.id 
+                                ? { ...seg, isImageLoading: false }
+                                : seg
+                        ));
+                    }
+                })();
+            }
+
             setGameState(GameState.PLAYING);
         } catch (error) {
             const message = error instanceof Error ? error.message : "An unknown error occurred.";
@@ -96,7 +160,12 @@ const App: React.FC = () => {
             }
             const session = await resumeAdventure(savedGame.chatHistory);
             setChatSession(session);
-            setStoryHistory(savedGame.storyHistory);
+            // Defensively set isImageLoading to false for all segments on load
+            const loadedStoryHistory = savedGame.storyHistory.map(segment => ({
+                ...segment,
+                isImageLoading: false, 
+            }));
+            setStoryHistory(loadedStoryHistory);
             setInventory(savedGame.inventory || []);
             setGameState(GameState.PLAYING);
         } catch (error) {
@@ -125,52 +194,49 @@ const App: React.FC = () => {
             type: 'action',
             text: action,
         };
-        setStoryHistory(prev => [...prev, newActionSegment]);
+        const historyWithAction = [...storyHistory, newActionSegment];
+        setStoryHistory(historyWithAction);
 
         try {
             const rawResponse = await continueAdventure(chatSession, action, inventory);
-            const { narrative, itemsToAdd, itemsToRemove } = parseGeminiResponse(rawResponse);
+            const { narrative, itemsToAdd, itemsToRemove, imagePrompt } = parseGeminiResponse(rawResponse);
             
-            const newNarrativeSegment: StorySegment = {
-                id: storyHistory.length + 1,
-                type: 'narrative',
-                text: narrative,
-            };
-            
-            // Update inventory based on commands
-            let updatedInventory = [...inventory];
-            if(itemsToAdd.length > 0 || itemsToRemove.length > 0) {
-                 updatedInventory = inventory
+            if (itemsToAdd.length > 0 || itemsToRemove.length > 0) {
+                 const updatedInventory = inventory
                     .filter(item => !itemsToRemove.includes(item))
                     .concat(itemsToAdd);
-                 // remove duplicates
-                 updatedInventory = [...new Set(updatedInventory)];
-                 setInventory(updatedInventory);
+                 setInventory([...new Set(updatedInventory)]);
             }
+            
+            const newNarrativeSegment: StorySegment = {
+                id: historyWithAction.length,
+                type: 'narrative',
+                text: narrative,
+                isImageLoading: !!imagePrompt,
+            };
+            
+            setStoryHistory(prev => [...prev, newNarrativeSegment]);
 
-            setStoryHistory(prev => {
-                const updatedHistory = [...prev, newNarrativeSegment];
-                
-                const saveGame = async () => {
+            if (imagePrompt) {
+                (async () => {
                     try {
-                        const chatHistory = await chatSession.getHistory();
-                        const saveData: SavedGame = { storyHistory: updatedHistory, chatHistory, inventory: updatedInventory };
-                        localStorage.setItem(SAVE_KEY, JSON.stringify(saveData));
-                        setHasSaveGame(true);
+                        const base64Data = await generateImage(imagePrompt);
+                        const imageUrl = `data:image/png;base64,${base64Data}`;
+                         setStoryHistory(prev => prev.map(seg => 
+                            seg.id === newNarrativeSegment.id 
+                                ? { ...seg, imageUrl, isImageLoading: false } 
+                                : seg
+                        ));
                     } catch (e) {
-                        console.error("Failed to save game:", e);
-                         const errorSegment: StorySegment = {
-                            id: updatedHistory.length,
-                            type: 'system',
-                            text: `(System: Failed to save progress.)`,
-                        };
-                         setStoryHistory(prev => [...prev, errorSegment]);
+                         console.error("Image generation failed:", e);
+                         setStoryHistory(prev => prev.map(seg => 
+                            seg.id === newNarrativeSegment.id 
+                                ? { ...seg, isImageLoading: false }
+                                : seg
+                        ));
                     }
-                };
-                saveGame();
-
-                return updatedHistory;
-            });
+                })();
+            }
 
         } catch (error) {
             const message = error instanceof Error ? error.message : "An unknown error occurred.";

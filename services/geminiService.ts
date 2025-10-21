@@ -1,4 +1,4 @@
-import { GoogleGenAI, Chat, Content } from "@google/genai";
+import { GoogleGenAI, Chat, Content, Modality } from "@google/genai";
 import type { AdventureGenre, ChatSession, ChatHistory } from '../types';
 
 if (!process.env.API_KEY) {
@@ -14,6 +14,7 @@ const SYSTEM_INSTRUCTION = `You are a master storyteller and text adventure game
 - Your world contains items the player can pick up and drop.
 - When the player successfully picks up an item, you MUST include a command in your response on a new line: \`[INVENTORY_ADD: item name]\`.
 - When the player successfully drops an item, you MUST include a command in your response on a new line: \`[INVENTORY_REMOVE: item name]\`. The item name must EXACTLY match an item in their inventory.
+- After the narrative, on a new line, provide a concise, descriptive prompt for an image generation model that captures the essence of the scene. Format it as: \`[IMAGE_PROMPT: your descriptive prompt here]\`. This prompt should be suitable for generating a fantasy/sci-fi/etc. style image.
 - The player's current inventory will be provided with each prompt. Use this to inform the story. For example, if they have a key, they can open a corresponding lock. If they try to drop an item they don't have, tell them.
 - Only respond with an inventory command if the action is successful. The narrative you provide should also describe the action, but the command is for the game engine.`;
 
@@ -61,5 +62,33 @@ export const resumeAdventure = async (history: ChatHistory): Promise<ChatSession
   } catch (error) {
     console.error("Error resuming adventure:", error);
     throw new Error("Failed to resume the adventure with Gemini.");
+  }
+};
+
+export const generateImage = async (prompt: string): Promise<string> => {
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-image',
+      contents: {
+        parts: [
+          {
+            text: prompt,
+          },
+        ],
+      },
+      config: {
+          responseModalities: [Modality.IMAGE],
+      },
+    });
+    
+    for (const part of response.candidates[0].content.parts) {
+      if (part.inlineData) {
+        return part.inlineData.data;
+      }
+    }
+    throw new Error("No image data found in response");
+  } catch (error) {
+    console.error("Error generating image:", error);
+    throw new Error("Failed to generate image with Gemini.");
   }
 };

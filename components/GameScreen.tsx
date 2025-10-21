@@ -44,6 +44,20 @@ const StoryLog: React.FC<{ storyHistory: StorySegment[] }> = ({ storyHistory }) 
             {storyHistory.map((segment) => (
                 <div key={segment.id} className="whitespace-pre-wrap">
                     {segment.type === 'action' && <span className="text-cyan-400 mr-2 font-bold">&gt;</span>}
+                    
+                    {segment.isImageLoading && (
+                        <div className="my-4 aspect-video bg-gray-700/50 rounded-lg flex items-center justify-center animate-pulse">
+                            <span className="text-gray-400">Conjuring a vision...</span>
+                        </div>
+                    )}
+                    {segment.imageUrl && (
+                        <img 
+                            src={segment.imageUrl} 
+                            alt="A scene from the adventure" 
+                            className="my-4 rounded-lg shadow-lg w-full object-cover aspect-video"
+                        />
+                    )}
+                    
                     <p className={`inline ${getTextColor(segment.type)}`}>{segment.text}</p>
                 </div>
             ))}

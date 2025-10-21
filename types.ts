@@ -17,6 +17,8 @@ export interface StorySegment {
   id: number;
   type: 'narrative' | 'action' | 'system';
   text: string;
+  imageUrl?: string;
+  isImageLoading?: boolean;
 }
 
 export type ChatSession = Chat;
