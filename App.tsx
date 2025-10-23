@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import type { StorySegment, AdventureGenre, ChatSession, SavedGame } from './types';
+import type { StorySegment, AdventureGenre, ChatSession, SavedGame, PlayerStats } from './types';
 import { GameState } from './types';
 import { StartScreen } from './components/StartScreen';
 import { GameScreen } from './components/GameScreen';
@@ -7,11 +7,12 @@ import { startAdventure, continueAdventure, resumeAdventure, generateImage } fro
 
 const SAVE_KEY = 'geminiAdventureSave';
 
-const parseGeminiResponse = (responseText: string): { narrative: string; itemsToAdd: string[]; itemsToRemove: string[]; imagePrompt: string | null } => {
+const parseGeminiResponse = (responseText: string): { narrative: string; itemsToAdd: string[]; itemsToRemove: string[]; imagePrompt: string | null; statUpdates: Record<string, number> } => {
     const narrativeLines = [];
     const itemsToAdd: string[] = [];
     const itemsToRemove: string[] = [];
     let imagePrompt: string | null = null;
+    const statUpdates: Record<string, number> = {};
     const lines = responseText.split('\n');
 
     for (const line of lines) {
@@ -30,6 +31,18 @@ const parseGeminiResponse = (responseText: string): { narrative: string; itemsTo
             imagePrompt = imagePromptMatch[1].trim();
             continue;
         }
+        const statUpdateMatch = line.match(/\[STAT_UPDATE:\s*(.+)\]/);
+        if (statUpdateMatch?.[1]) {
+            const updates = statUpdateMatch[1].split(',');
+            updates.forEach(update => {
+                const [stat, value] = update.split('=').map(s => s.trim());
+                const numValue = parseInt(value, 10);
+                if (stat && !isNaN(numValue)) {
+                    statUpdates[stat] = numValue;
+                }
+            });
+            continue;
+        }
         narrativeLines.push(line);
     }
 
@@ -38,6 +51,7 @@ const parseGeminiResponse = (responseText: string): { narrative: string; itemsTo
         itemsToAdd,
         itemsToRemove,
         imagePrompt,
+        statUpdates,
     };
 };
 
@@ -46,10 +60,16 @@ const App: React.FC = () => {
     const [gameState, setGameState] = useState<GameState>(GameState.START_SCREEN);
     const [storyHistory, setStoryHistory] = useState<StorySegment[]>([]);
     const [inventory, setInventory] = useState<string[]>([]);
+    const [playerStats, setPlayerStats] = useState<PlayerStats>({
+        health: { current: 100, max: 100 },
+        mana: { current: 50, max: 50 },
+        stamina: { current: 80, max: 80 },
+    });
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
     const [chatSession, setChatSession] = useState<ChatSession | null>(null);
     const [hasSaveGame, setHasSaveGame] = useState<boolean>(false);
+    const [isSaveDisabledByQuota, setIsSaveDisabledByQuota] = useState<boolean>(false);
 
     useEffect(() => {
         try {
@@ -63,7 +83,7 @@ const App: React.FC = () => {
 
     // Auto-save game progress
     useEffect(() => {
-        if (gameState !== GameState.PLAYING || !chatSession || storyHistory.length === 0) {
+        if (gameState !== GameState.PLAYING || !chatSession || storyHistory.length === 0 || isSaveDisabledByQuota) {
             return;
         }
 
@@ -71,12 +91,27 @@ const App: React.FC = () => {
             try {
                 const chatHistory = await chatSession.getHistory();
                 if (chatHistory.length > 0) {
-                    const saveData: SavedGame = { storyHistory, chatHistory, inventory };
+                    // Create a version of storyHistory without image data for saving
+                    const storyHistoryForSave = storyHistory.map(segment => {
+                        const { imageUrl, isImageLoading, ...rest } = segment;
+                        return rest;
+                    });
+                    const saveData: SavedGame = { storyHistory: storyHistoryForSave, chatHistory, inventory, playerStats };
                     localStorage.setItem(SAVE_KEY, JSON.stringify(saveData));
                     setHasSaveGame(true);
                 }
             } catch (e) {
                 console.error("Auto-save failed:", e);
+                if (e instanceof DOMException && e.name === 'QuotaExceededError') {
+                    console.warn("LocalStorage quota exceeded. Disabling auto-save.");
+                    setIsSaveDisabledByQuota(true);
+                    const errorSegment: StorySegment = {
+                        id: storyHistory.length,
+                        type: 'system',
+                        text: `[System Warning: The adventure has grown too large for auto-saving. You can continue playing, but further progress won't be saved. Consider exporting your story.]`,
+                    };
+                    setStoryHistory(prev => [...prev, errorSegment]);
+                }
             }
         };
         
@@ -84,7 +119,7 @@ const App: React.FC = () => {
         const timer = setTimeout(saveGame, 500);
         return () => clearTimeout(timer);
 
-    }, [storyHistory, inventory, gameState, chatSession]);
+    }, [storyHistory, inventory, gameState, chatSession, isSaveDisabledByQuota, playerStats]);
 
 
     const handleStartGame = useCallback(async (genre: AdventureGenre) => {
@@ -92,6 +127,12 @@ const App: React.FC = () => {
         setErrorMessage(null);
         setStoryHistory([]);
         setInventory([]);
+        setPlayerStats({
+            health: { current: 100, max: 100 },
+            mana: { current: 50, max: 50 },
+            stamina: { current: 80, max: 80 },
+        });
+        setIsSaveDisabledByQuota(false);
 
         try {
             localStorage.removeItem(SAVE_KEY);
@@ -167,6 +208,16 @@ const App: React.FC = () => {
             }));
             setStoryHistory(loadedStoryHistory);
             setInventory(savedGame.inventory || []);
+            if (savedGame.playerStats) {
+                setPlayerStats(savedGame.playerStats);
+            } else {
+                // Fallback for old saves without stats
+                setPlayerStats({
+                    health: { current: 100, max: 100 },
+                    mana: { current: 50, max: 50 },
+                    stamina: { current: 80, max: 80 },
+                });
+            }
             setGameState(GameState.PLAYING);
         } catch (error) {
             const message = error instanceof Error ? error.message : "An unknown error occurred while loading.";
@@ -198,9 +249,23 @@ const App: React.FC = () => {
         setStoryHistory(historyWithAction);
 
         try {
-            const rawResponse = await continueAdventure(chatSession, action, inventory);
-            const { narrative, itemsToAdd, itemsToRemove, imagePrompt } = parseGeminiResponse(rawResponse);
+            const rawResponse = await continueAdventure(chatSession, action, inventory, playerStats);
+            const { narrative, itemsToAdd, itemsToRemove, imagePrompt, statUpdates } = parseGeminiResponse(rawResponse);
             
+            if (Object.keys(statUpdates).length > 0) {
+                setPlayerStats(prevStats => {
+                    const newStats = JSON.parse(JSON.stringify(prevStats)); // Deep copy
+                    for (const statKey in statUpdates) {
+                        if (Object.prototype.hasOwnProperty.call(newStats, statKey)) {
+                            const change = statUpdates[statKey];
+                            const stat = newStats[statKey as keyof PlayerStats];
+                            stat.current = Math.max(0, Math.min(stat.max, stat.current + change));
+                        }
+                    }
+                    return newStats;
+                });
+            }
+
             if (itemsToAdd.length > 0 || itemsToRemove.length > 0) {
                  const updatedInventory = inventory
                     .filter(item => !itemsToRemove.includes(item))
@@ -249,7 +314,7 @@ const App: React.FC = () => {
         } finally {
             setIsLoading(false);
         }
-    }, [chatSession, storyHistory, inventory]);
+    }, [chatSession, storyHistory, inventory, playerStats]);
     
     const handleRestart = useCallback(() => {
       localStorage.removeItem(SAVE_KEY);
@@ -259,6 +324,12 @@ const App: React.FC = () => {
       setStoryHistory([]);
       setInventory([]);
       setChatSession(null);
+      setPlayerStats({
+        health: { current: 100, max: 100 },
+        mana: { current: 50, max: 50 },
+        stamina: { current: 80, max: 80 },
+      });
+      setIsSaveDisabledByQuota(false);
     }, []);
 
     const handleExportStory = useCallback(() => {
@@ -308,6 +379,7 @@ const App: React.FC = () => {
                 return <GameScreen 
                     storyHistory={storyHistory} 
                     inventory={inventory} 
+                    playerStats={playerStats}
                     onSendAction={handlePlayerAction} 
                     isLoading={isLoading}
                     onExportStory={handleExportStory}

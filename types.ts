@@ -24,8 +24,20 @@ export interface StorySegment {
 export type ChatSession = Chat;
 export type ChatHistory = Content[];
 
+export interface Stat {
+  current: number;
+  max: number;
+}
+
+export interface PlayerStats {
+  health: Stat;
+  mana: Stat;
+  stamina: Stat;
+}
+
 export interface SavedGame {
   storyHistory: StorySegment[];
   chatHistory: ChatHistory;
   inventory: string[];
+  playerStats: PlayerStats;
 }

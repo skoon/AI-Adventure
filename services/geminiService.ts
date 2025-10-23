@@ -1,5 +1,5 @@
 import { GoogleGenAI, Chat, Content, Modality } from "@google/genai";
-import type { AdventureGenre, ChatSession, ChatHistory } from '../types';
+import type { AdventureGenre, ChatSession, ChatHistory, PlayerStats } from '../types';
 
 if (!process.env.API_KEY) {
   throw new Error("API_KEY environment variable not set");
@@ -11,12 +11,14 @@ const SYSTEM_INSTRUCTION = `You are a master storyteller and text adventure game
 - Respond in the second person ('You see...', 'You feel...').
 - Keep your responses descriptive but concise (1-2 paragraphs).
 - Do not break character or mention that you are an AI.
+- The player has stats: Health, Mana, and Stamina. These stats should affect the story. For example, low stamina might make actions fail, low health is dangerous, and mana is used for special abilities.
+- When an event or action should change a player's stats, you MUST include a command in your response on a new line: \`[STAT_UPDATE: stat1=+value, stat2=-value]\`. For example: \`[STAT_UPDATE: health=-10, stamina=-5]\`. Use 'health', 'mana', or 'stamina'. The values can be positive or negative.
 - Your world contains items the player can pick up and drop.
 - When the player successfully picks up an item, you MUST include a command in your response on a new line: \`[INVENTORY_ADD: item name]\`.
 - When the player successfully drops an item, you MUST include a command in your response on a new line: \`[INVENTORY_REMOVE: item name]\`. The item name must EXACTLY match an item in their inventory.
 - After the narrative, on a new line, provide a concise, descriptive prompt for an image generation model that captures the essence of the scene. Format it as: \`[IMAGE_PROMPT: your descriptive prompt here]\`. This prompt should be suitable for generating a fantasy/sci-fi/etc. style image.
-- The player's current inventory will be provided with each prompt. Use this to inform the story. For example, if they have a key, they can open a corresponding lock. If they try to drop an item they don't have, tell them.
-- Only respond with an inventory command if the action is successful. The narrative you provide should also describe the action, but the command is for the game engine.`;
+- The player's current inventory and stats will be provided with each prompt. Use this to inform the story. For example, if they have a key, they can open a corresponding lock. If they try to drop an item they don't have, tell them.
+- Only respond with a command if the action is successful. The narrative you provide should also describe the action, but the command is for the game engine.`;
 
 export const startAdventure = async (genre: AdventureGenre): Promise<{ session: ChatSession; opening: string }> => {
   try {
@@ -38,9 +40,12 @@ export const startAdventure = async (genre: AdventureGenre): Promise<{ session: 
   }
 };
 
-export const continueAdventure = async (session: ChatSession, action: string, inventory: string[]): Promise<string> => {
+export const continueAdventure = async (session: ChatSession, action: string, inventory: string[], stats: PlayerStats): Promise<string> => {
   try {
-    const prompt = `Current Inventory: [${inventory.length > 0 ? inventory.join(', ') : 'empty'}]\n\nPlayer action: "${action}"`;
+    const prompt = `Current Stats: Health(${stats.health.current}/${stats.health.max}), Mana(${stats.mana.current}/${stats.mana.max}), Stamina(${stats.stamina.current}/${stats.stamina.max})
+Current Inventory: [${inventory.length > 0 ? inventory.join(', ') : 'empty'}]
+
+Player action: "${action}"`;
     const response = await session.sendMessage({ message: prompt });
     return response.text;
   } catch (error) {

@@ -1,9 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import type { StorySegment } from '../types';
+import type { StorySegment, PlayerStats, Stat } from '../types';
 
 interface GameScreenProps {
   storyHistory: StorySegment[];
   inventory: string[];
+  playerStats: PlayerStats;
   onSendAction: (action: string) => void;
   isLoading: boolean;
   onExportStory: () => void;
@@ -102,8 +103,32 @@ const ActionInput: React.FC<{ onSendAction: (action: string) => void; isLoading:
     );
 };
 
+const StatBar: React.FC<{ label: string; stat: Stat; color: string }> = ({ label, stat, color }) => {
+    const percentage = stat.max > 0 ? (stat.current / stat.max) * 100 : 0;
+    return (
+        <div className="mb-3">
+            <div className="flex justify-between items-end text-sm mb-1">
+                <span className="font-bold text-gray-200">{label}</span>
+                <span className="font-mono text-gray-400">{stat.current} / {stat.max}</span>
+            </div>
+            <div className="w-full bg-gray-700 rounded-full h-2.5">
+                <div className={`${color} h-2.5 rounded-full`} style={{ width: `${percentage}%`, transition: 'width 0.5s ease-in-out' }}></div>
+            </div>
+        </div>
+    );
+};
+
+const StatsDisplay: React.FC<{ stats: PlayerStats }> = ({ stats }) => (
+    <div className="p-4 border-b border-gray-700 flex-shrink-0">
+        <h2 className="text-lg font-bold text-cyan-400 border-b border-gray-600 pb-2 mb-4">Stats</h2>
+        <StatBar label="Health" stat={stats.health} color="bg-red-500" />
+        <StatBar label="Mana" stat={stats.mana} color="bg-blue-500" />
+        <StatBar label="Stamina" stat={stats.stamina} color="bg-green-500" />
+    </div>
+);
+
 const Inventory: React.FC<{ items: string[] }> = ({ items }) => (
-    <div className="w-full md:w-64 flex-shrink-0 bg-gray-900/80 p-4 border-l border-gray-700 overflow-y-auto">
+    <div className="flex-grow p-4 overflow-y-auto">
         <h2 className="text-lg font-bold text-cyan-400 border-b border-gray-600 pb-2 mb-4">Inventory</h2>
         {items.length === 0 ? (
             <p className="text-gray-500 italic text-sm">Your pack is empty.</p>
@@ -145,7 +170,7 @@ const GameHeader: React.FC<{ onExportStory: () => void; onRestart: () => void; }
 };
 
 
-export const GameScreen: React.FC<GameScreenProps> = ({ storyHistory, inventory, onSendAction, isLoading, onExportStory, onRestart }) => {
+export const GameScreen: React.FC<GameScreenProps> = ({ storyHistory, inventory, playerStats, onSendAction, isLoading, onExportStory, onRestart }) => {
     return (
         <div className="flex flex-col md:flex-row h-screen max-w-7xl mx-auto bg-gray-800/50 shadow-2xl border-x border-gray-700">
             <div className="flex flex-col flex-grow">
@@ -153,7 +178,10 @@ export const GameScreen: React.FC<GameScreenProps> = ({ storyHistory, inventory,
                 <StoryLog storyHistory={storyHistory} />
                 <ActionInput onSendAction={onSendAction} isLoading={isLoading} />
             </div>
-            <Inventory items={inventory} />
+            <div className="w-full md:w-64 flex-shrink-0 bg-gray-900/80 p-0 border-l border-gray-700 flex flex-col">
+                <StatsDisplay stats={playerStats} />
+                <Inventory items={inventory} />
+            </div>
         </div>
     );
 };
