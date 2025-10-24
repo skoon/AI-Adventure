@@ -10,7 +10,9 @@ export enum AdventureGenre {
   FANTASY = 'Fantasy',
   SCIFI = 'Sci-Fi',
   MYSTERY = 'Mystery',
-  CYBERPUNK = 'Cyberpunk'
+  CYBERPUNK = 'Cyberpunk',
+  STEAMPUNK = 'Steampunk',
+  SPY = 'Spy Adventure'
 }
 
 export interface StorySegment {
@@ -35,9 +37,16 @@ export interface PlayerStats {
   stamina: Stat;
 }
 
+export interface Enemy {
+  name: string;
+  health: Stat;
+}
+
 export interface SavedGame {
   storyHistory: StorySegment[];
   chatHistory: ChatHistory;
   inventory: string[];
   playerStats: PlayerStats;
+  isInCombat: boolean;
+  currentEnemy: Enemy | null;
 }

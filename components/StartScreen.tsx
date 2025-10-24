@@ -19,7 +19,14 @@ const GenreButton: React.FC<{ genre: AdventureGenre, onClick: (genre: AdventureG
 );
 
 export const StartScreen: React.FC<StartScreenProps> = ({ onStartGame, isLoading, hasSaveGame, onLoadGame }) => {
-  const genres = [AdventureGenre.FANTASY, AdventureGenre.SCIFI, AdventureGenre.MYSTERY, AdventureGenre.CYBERPUNK];
+  const genres = [
+    AdventureGenre.FANTASY,
+    AdventureGenre.SCIFI,
+    AdventureGenre.MYSTERY,
+    AdventureGenre.CYBERPUNK,
+    AdventureGenre.STEAMPUNK,
+    AdventureGenre.SPY,
+  ];
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-gray-900 p-4 text-center">
@@ -57,7 +64,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({ onStartGame, isLoading
               <span className="text-gray-300">Summoning the storyteller...</span>
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
               {genres.map((genre) => (
                 <GenreButton key={genre} genre={genre} onClick={onStartGame} disabled={isLoading} />
               ))}

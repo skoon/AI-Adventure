@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import type { StorySegment, PlayerStats, Stat } from '../types';
+import type { StorySegment, PlayerStats, Stat, Enemy } from '../types';
 
 interface GameScreenProps {
   storyHistory: StorySegment[];
@@ -9,6 +9,8 @@ interface GameScreenProps {
   isLoading: boolean;
   onExportStory: () => void;
   onRestart: () => void;
+  isInCombat: boolean;
+  currentEnemy: Enemy | null;
 }
 
 const LoadingIndicator: React.FC = () => (
@@ -67,7 +69,17 @@ const StoryLog: React.FC<{ storyHistory: StorySegment[] }> = ({ storyHistory }) 
     );
 };
 
-const ActionInput: React.FC<{ onSendAction: (action: string) => void; isLoading: boolean }> = ({ onSendAction, isLoading }) => {
+const ActionButton: React.FC<{ onClick: () => void, children: React.ReactNode }> = ({ onClick, children }) => (
+    <button
+        onClick={onClick}
+        className="flex-1 bg-gray-700 hover:bg-gray-600 text-gray-200 font-semibold py-2 px-3 rounded-md transition-colors text-sm"
+    >
+        {children}
+    </button>
+);
+
+
+const ActionInput: React.FC<{ onSendAction: (action: string) => void; isLoading: boolean; isInCombat: boolean; }> = ({ onSendAction, isLoading, isInCombat }) => {
     const [input, setInput] = useState('');
 
     const handleSubmit = (e: React.FormEvent) => {
@@ -78,6 +90,12 @@ const ActionInput: React.FC<{ onSendAction: (action: string) => void; isLoading:
         }
     };
     
+    const handleActionClick = (action: string) => {
+        if (!isLoading) {
+            onSendAction(action);
+        }
+    };
+
     return (
         <div className="p-4 border-t border-gray-700 bg-gray-900">
             {isLoading && <div className="mb-2"><LoadingIndicator /></div>}
@@ -86,7 +104,7 @@ const ActionInput: React.FC<{ onSendAction: (action: string) => void; isLoading:
                     type="text"
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
-                    placeholder="What do you do next?"
+                    placeholder={isInCombat ? "Your combat action?" : "What do you do next?"}
                     disabled={isLoading}
                     className="flex-grow bg-gray-800 text-gray-200 border border-gray-600 rounded-md py-2 px-4 focus:outline-none focus:ring-2 focus:ring-cyan-500 transition-all"
                     autoFocus
@@ -99,6 +117,13 @@ const ActionInput: React.FC<{ onSendAction: (action: string) => void; isLoading:
                     Send
                 </button>
             </form>
+            {isInCombat && (
+                <div className="mt-3 flex items-center justify-center space-x-3">
+                    <ActionButton onClick={() => handleActionClick('attack')}>Attack</ActionButton>
+                    <ActionButton onClick={() => handleActionClick('defend')}>Defend</ActionButton>
+                    <ActionButton onClick={() => handleActionClick('flee')}>Flee</ActionButton>
+                </div>
+            )}
         </div>
     );
 };
@@ -120,12 +145,20 @@ const StatBar: React.FC<{ label: string; stat: Stat; color: string }> = ({ label
 
 const StatsDisplay: React.FC<{ stats: PlayerStats }> = ({ stats }) => (
     <div className="p-4 border-b border-gray-700 flex-shrink-0">
-        <h2 className="text-lg font-bold text-cyan-400 border-b border-gray-600 pb-2 mb-4">Stats</h2>
+        <h2 className="text-lg font-bold text-cyan-400 border-b border-gray-600 pb-2 mb-4">Player Stats</h2>
         <StatBar label="Health" stat={stats.health} color="bg-red-500" />
         <StatBar label="Mana" stat={stats.mana} color="bg-blue-500" />
         <StatBar label="Stamina" stat={stats.stamina} color="bg-green-500" />
     </div>
 );
+
+const EnemyDisplay: React.FC<{ enemy: Enemy }> = ({ enemy }) => (
+    <div className="p-4 border-b border-gray-700 flex-shrink-0 bg-red-900/20">
+        <h2 className="text-lg font-bold text-red-400 border-b border-red-800/50 pb-2 mb-4">Enemy</h2>
+        <StatBar label={enemy.name} stat={enemy.health} color="bg-red-600" />
+    </div>
+);
+
 
 const Inventory: React.FC<{ items: string[] }> = ({ items }) => (
     <div className="flex-grow p-4 overflow-y-auto">
@@ -170,15 +203,16 @@ const GameHeader: React.FC<{ onExportStory: () => void; onRestart: () => void; }
 };
 
 
-export const GameScreen: React.FC<GameScreenProps> = ({ storyHistory, inventory, playerStats, onSendAction, isLoading, onExportStory, onRestart }) => {
+export const GameScreen: React.FC<GameScreenProps> = ({ storyHistory, inventory, playerStats, onSendAction, isLoading, onExportStory, onRestart, isInCombat, currentEnemy }) => {
     return (
         <div className="flex flex-col md:flex-row h-screen max-w-7xl mx-auto bg-gray-800/50 shadow-2xl border-x border-gray-700">
             <div className="flex flex-col flex-grow">
                 <GameHeader onExportStory={onExportStory} onRestart={onRestart} />
                 <StoryLog storyHistory={storyHistory} />
-                <ActionInput onSendAction={onSendAction} isLoading={isLoading} />
+                <ActionInput onSendAction={onSendAction} isLoading={isLoading} isInCombat={isInCombat} />
             </div>
-            <div className="w-full md:w-64 flex-shrink-0 bg-gray-900/80 p-0 border-l border-gray-700 flex flex-col">
+            <div className="w-full md:w-72 flex-shrink-0 bg-gray-900/80 p-0 border-l border-gray-700 flex flex-col">
+                {isInCombat && currentEnemy && <EnemyDisplay enemy={currentEnemy} />}
                 <StatsDisplay stats={playerStats} />
                 <Inventory items={inventory} />
             </div>

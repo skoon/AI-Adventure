@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import type { StorySegment, AdventureGenre, ChatSession, SavedGame, PlayerStats } from './types';
+import type { StorySegment, AdventureGenre, ChatSession, SavedGame, PlayerStats, Enemy } from './types';
 import { GameState } from './types';
 import { StartScreen } from './components/StartScreen';
 import { GameScreen } from './components/GameScreen';
@@ -7,43 +7,57 @@ import { startAdventure, continueAdventure, resumeAdventure, generateImage } fro
 
 const SAVE_KEY = 'geminiAdventureSave';
 
-const parseGeminiResponse = (responseText: string): { narrative: string; itemsToAdd: string[]; itemsToRemove: string[]; imagePrompt: string | null; statUpdates: Record<string, number> } => {
+const parseGeminiResponse = (responseText: string): { 
+    narrative: string; 
+    itemsToAdd: string[]; 
+    itemsToRemove: string[]; 
+    imagePrompt: string | null; 
+    statUpdates: Record<string, number>;
+    combatStart: { name: string; health: number; } | null;
+    combatEnd: boolean;
+} => {
     const narrativeLines = [];
     const itemsToAdd: string[] = [];
     const itemsToRemove: string[] = [];
     let imagePrompt: string | null = null;
     const statUpdates: Record<string, number> = {};
+    let combatStart: { name: string; health: number; } | null = null;
+    let combatEnd = false;
+
     const lines = responseText.split('\n');
 
     for (const line of lines) {
-        const addMatch = line.match(/\[INVENTORY_ADD:\s*(.+)\]/);
-        if (addMatch?.[1]) {
-            itemsToAdd.push(addMatch[1].trim());
-            continue;
+        if (line.trim().startsWith('[INVENTORY_ADD:')) {
+            const match = line.match(/\[INVENTORY_ADD:\s*(.+)\]/);
+            if (match?.[1]) itemsToAdd.push(match[1].trim());
+        } else if (line.trim().startsWith('[INVENTORY_REMOVE:')) {
+            const match = line.match(/\[INVENTORY_REMOVE:\s*(.+)\]/);
+            if (match?.[1]) itemsToRemove.push(match[1].trim());
+        } else if (line.trim().startsWith('[IMAGE_PROMPT:')) {
+            const match = line.match(/\[IMAGE_PROMPT:\s*(.+)\]/);
+            if (match?.[1]) imagePrompt = match[1].trim();
+        } else if (line.trim().startsWith('[STAT_UPDATE:')) {
+            const match = line.match(/\[STAT_UPDATE:\s*(.+)\]/);
+            if (match?.[1]) {
+                const updates = match[1].split(',');
+                updates.forEach(update => {
+                    const [stat, value] = update.split('=').map(s => s.trim());
+                    const numValue = parseInt(value, 10);
+                    if (stat && !isNaN(numValue)) {
+                        statUpdates[stat] = numValue;
+                    }
+                });
+            }
+        } else if (line.trim().startsWith('[COMBAT_START:')) {
+            const match = line.match(/\[COMBAT_START:\s*name=(.+?),\s*health=(\d+)\s*\]/);
+            if (match?.[1] && match?.[2]) {
+                combatStart = { name: match[1].trim(), health: parseInt(match[2], 10) };
+            }
+        } else if (line.trim() === '[COMBAT_END]') {
+            combatEnd = true;
+        } else {
+            narrativeLines.push(line);
         }
-        const removeMatch = line.match(/\[INVENTORY_REMOVE:\s*(.+)\]/);
-        if (removeMatch?.[1]) {
-            itemsToRemove.push(removeMatch[1].trim());
-            continue;
-        }
-        const imagePromptMatch = line.match(/\[IMAGE_PROMPT:\s*(.+)\]/);
-        if (imagePromptMatch?.[1]) {
-            imagePrompt = imagePromptMatch[1].trim();
-            continue;
-        }
-        const statUpdateMatch = line.match(/\[STAT_UPDATE:\s*(.+)\]/);
-        if (statUpdateMatch?.[1]) {
-            const updates = statUpdateMatch[1].split(',');
-            updates.forEach(update => {
-                const [stat, value] = update.split('=').map(s => s.trim());
-                const numValue = parseInt(value, 10);
-                if (stat && !isNaN(numValue)) {
-                    statUpdates[stat] = numValue;
-                }
-            });
-            continue;
-        }
-        narrativeLines.push(line);
     }
 
     return {
@@ -52,6 +66,8 @@ const parseGeminiResponse = (responseText: string): { narrative: string; itemsTo
         itemsToRemove,
         imagePrompt,
         statUpdates,
+        combatStart,
+        combatEnd,
     };
 };
 
@@ -65,6 +81,8 @@ const App: React.FC = () => {
         mana: { current: 50, max: 50 },
         stamina: { current: 80, max: 80 },
     });
+    const [isInCombat, setIsInCombat] = useState<boolean>(false);
+    const [currentEnemy, setCurrentEnemy] = useState<Enemy | null>(null);
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
     const [chatSession, setChatSession] = useState<ChatSession | null>(null);
@@ -91,12 +109,15 @@ const App: React.FC = () => {
             try {
                 const chatHistory = await chatSession.getHistory();
                 if (chatHistory.length > 0) {
-                    // Create a version of storyHistory without image data for saving
-                    const storyHistoryForSave = storyHistory.map(segment => {
-                        const { imageUrl, isImageLoading, ...rest } = segment;
-                        return rest;
-                    });
-                    const saveData: SavedGame = { storyHistory: storyHistoryForSave, chatHistory, inventory, playerStats };
+                    const storyHistoryForSave = storyHistory.map(({ imageUrl, isImageLoading, ...rest }) => rest);
+                    const saveData: SavedGame = { 
+                        storyHistory: storyHistoryForSave, 
+                        chatHistory, 
+                        inventory, 
+                        playerStats,
+                        isInCombat,
+                        currentEnemy,
+                     };
                     localStorage.setItem(SAVE_KEY, JSON.stringify(saveData));
                     setHasSaveGame(true);
                 }
@@ -115,11 +136,10 @@ const App: React.FC = () => {
             }
         };
         
-        // Debounce saving to prevent rapid writes
         const timer = setTimeout(saveGame, 500);
         return () => clearTimeout(timer);
 
-    }, [storyHistory, inventory, gameState, chatSession, isSaveDisabledByQuota, playerStats]);
+    }, [storyHistory, inventory, playerStats, isInCombat, currentEnemy, gameState, chatSession, isSaveDisabledByQuota]);
 
 
     const handleStartGame = useCallback(async (genre: AdventureGenre) => {
@@ -132,6 +152,8 @@ const App: React.FC = () => {
             mana: { current: 50, max: 50 },
             stamina: { current: 80, max: 80 },
         });
+        setIsInCombat(false);
+        setCurrentEnemy(null);
         setIsSaveDisabledByQuota(false);
 
         try {
@@ -201,23 +223,16 @@ const App: React.FC = () => {
             }
             const session = await resumeAdventure(savedGame.chatHistory);
             setChatSession(session);
-            // Defensively set isImageLoading to false for all segments on load
             const loadedStoryHistory = savedGame.storyHistory.map(segment => ({
                 ...segment,
                 isImageLoading: false, 
             }));
             setStoryHistory(loadedStoryHistory);
             setInventory(savedGame.inventory || []);
-            if (savedGame.playerStats) {
-                setPlayerStats(savedGame.playerStats);
-            } else {
-                // Fallback for old saves without stats
-                setPlayerStats({
-                    health: { current: 100, max: 100 },
-                    mana: { current: 50, max: 50 },
-                    stamina: { current: 80, max: 80 },
-                });
-            }
+            setPlayerStats(savedGame.playerStats || { health: { current: 100, max: 100 }, mana: { current: 50, max: 50 }, stamina: { current: 80, max: 80 } });
+            setIsInCombat(savedGame.isInCombat || false);
+            setCurrentEnemy(savedGame.currentEnemy || null);
+
             setGameState(GameState.PLAYING);
         } catch (error) {
             const message = error instanceof Error ? error.message : "An unknown error occurred while loading.";
@@ -245,13 +260,28 @@ const App: React.FC = () => {
             type: 'action',
             text: action,
         };
-        const historyWithAction = [...storyHistory, newActionSegment];
-        setStoryHistory(historyWithAction);
+        setStoryHistory(prev => [...prev, newActionSegment]);
 
         try {
             const rawResponse = await continueAdventure(chatSession, action, inventory, playerStats);
-            const { narrative, itemsToAdd, itemsToRemove, imagePrompt, statUpdates } = parseGeminiResponse(rawResponse);
+            const { narrative, itemsToAdd, itemsToRemove, imagePrompt, statUpdates, combatStart, combatEnd } = parseGeminiResponse(rawResponse);
             
+            // State updates order is important here
+            
+            // 1. Combat state changes
+            if (combatStart) {
+                setIsInCombat(true);
+                setCurrentEnemy({
+                    name: combatStart.name,
+                    health: { current: combatStart.health, max: combatStart.health }
+                });
+            }
+            if (combatEnd) {
+                setIsInCombat(false);
+                setCurrentEnemy(null);
+            }
+
+            // 2. Stat updates (Player and Enemy)
             if (Object.keys(statUpdates).length > 0) {
                 setPlayerStats(prevStats => {
                     const newStats = JSON.parse(JSON.stringify(prevStats)); // Deep copy
@@ -264,8 +294,16 @@ const App: React.FC = () => {
                     }
                     return newStats;
                 });
+                if (statUpdates.enemyHealth !== undefined) {
+                    setCurrentEnemy(prevEnemy => {
+                        if (!prevEnemy) return null;
+                        const newHealth = Math.max(0, prevEnemy.health.current + statUpdates.enemyHealth);
+                        return { ...prevEnemy, health: { ...prevEnemy.health, current: newHealth }};
+                    });
+                }
             }
 
+            // 3. Inventory updates
             if (itemsToAdd.length > 0 || itemsToRemove.length > 0) {
                  const updatedInventory = inventory
                     .filter(item => !itemsToRemove.includes(item))
@@ -273,13 +311,13 @@ const App: React.FC = () => {
                  setInventory([...new Set(updatedInventory)]);
             }
             
+            // 4. Narrative and Image updates
             const newNarrativeSegment: StorySegment = {
-                id: historyWithAction.length,
+                id: storyHistory.length + 1,
                 type: 'narrative',
                 text: narrative,
                 isImageLoading: !!imagePrompt,
             };
-            
             setStoryHistory(prev => [...prev, newNarrativeSegment]);
 
             if (imagePrompt) {
@@ -329,6 +367,8 @@ const App: React.FC = () => {
         mana: { current: 50, max: 50 },
         stamina: { current: 80, max: 80 },
       });
+      setIsInCombat(false);
+      setCurrentEnemy(null);
       setIsSaveDisabledByQuota(false);
     }, []);
 
@@ -383,7 +423,9 @@ const App: React.FC = () => {
                     onSendAction={handlePlayerAction} 
                     isLoading={isLoading}
                     onExportStory={handleExportStory}
-                    onRestart={handleRestart} 
+                    onRestart={handleRestart}
+                    isInCombat={isInCombat}
+                    currentEnemy={currentEnemy}
                 />;
             default:
                  return <StartScreen onStartGame={handleStartGame} isLoading={isLoading} hasSaveGame={hasSaveGame} onLoadGame={handleLoadGame} />;
